@@ -25,4 +25,11 @@ public interface MessageRepository extends JpaRepository<Message,Long> {
 
     @Query(value = "SELECT COUNT(m.id) FROM messages m JOIN message_activites ma ON m.id = ma.messasge_id WHERE ma.status = 'SENT'", nativeQuery = true)
     int countListUndeliveredMessage(@Param("chatId") long chatId, @Param("phoneNumber")  String phoneNumber);
+
+    @Query(value = "SELECT DISTINCT m.id FROM message_activities ma JOIN messages m WHERE m.id = ma.message_id " +
+            "WHERE " +
+            "m.chat_id = :chatId AND " +
+            "ma.user_phone_number = :phoneNumber AND " +
+            "ma.status != 'READ'", nativeQuery = true)
+    List<Long> getListUnreadMessageId(@Param("chatId") long chatId, @Param("phoneNumber") String phoneNumber);
 }

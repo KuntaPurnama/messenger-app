@@ -3,7 +3,6 @@ package com.app.messenger.service.impl;
 import com.app.messenger.dto.LoginRequestDTO;
 import com.app.messenger.dto.LoginResponseDTO;
 import com.app.messenger.dto.RegisterRequestDTO;
-import com.app.messenger.dto.enumeration.UserStatusEnum;
 import com.app.messenger.error.exception.BaseException;
 import com.app.messenger.model.User;
 import com.app.messenger.model.UserAuth;

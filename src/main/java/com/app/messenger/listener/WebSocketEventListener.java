@@ -1,9 +1,9 @@
 package com.app.messenger.listener;
 
-import com.app.messenger.dto.UserDTO;
 import com.app.messenger.dto.UserSocketConnectionDTO;
 import com.app.messenger.dto.constant.RedisConstant;
 import com.app.messenger.dto.enumeration.NotificationType;
+import com.app.messenger.repository.UserRepository;
 import com.app.messenger.service.RedisService;
 import com.app.messenger.service.UserService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -15,10 +15,8 @@ import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.messaging.SessionConnectedEvent;
 import org.springframework.web.socket.messaging.SessionDisconnectEvent;
-import org.springframework.web.socket.messaging.SessionSubscribeEvent;
 
 import java.security.Principal;
-
 @Slf4j
 @Component
 @RequiredArgsConstructor
@@ -66,6 +64,7 @@ public class WebSocketEventListener {
         if (user != null) {
             String phoneNumber = user.getName();
             redisService.delete(RedisConstant.USER_SOCKET_PREFIX + phoneNumber);
+
             userService.updateUserOnlineStatus(phoneNumber, NotificationType.USER_OFFLINE);
             log.info("WebSocket disconnected: userId={}", phoneNumber);
         }

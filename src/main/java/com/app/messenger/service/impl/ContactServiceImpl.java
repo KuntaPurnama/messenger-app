@@ -1,6 +1,7 @@
 package com.app.messenger.service.impl;
 
 import com.app.messenger.dto.ContactDTO;
+import com.app.messenger.dto.ContactRequestDTO;
 import com.app.messenger.error.exception.BaseException;
 import com.app.messenger.model.Contact;
 import com.app.messenger.repository.ContactRepository;
@@ -19,8 +20,8 @@ public class ContactServiceImpl implements ContactService {
     private final ContactRepository contactRepository;
 
     @Override
-    public void addContact(ContactDTO contactDTO) {
-        boolean isExists = contactRepository.existsByUserPhoneNumberAndContactPhoneNumber(contactDTO.getUserPhoneNumber(), contactDTO.getContactPhoneNumber());
+    public void addContact(ContactRequestDTO contactDTO, String phoneNumber) {
+        boolean isExists = contactRepository.existsByUserPhoneNumberAndContactPhoneNumber(phoneNumber, contactDTO.getContactPhoneNumber());
         if (isExists) {
             throw BaseException.builder()
                     .code(HttpStatus.CONFLICT.value())
@@ -31,7 +32,7 @@ public class ContactServiceImpl implements ContactService {
 
         Contact contact = Contact.builder()
                 .contactPhoneNumber(contactDTO.getContactPhoneNumber())
-                .userPhoneNumber(contactDTO.getUserPhoneNumber())
+                .userPhoneNumber(phoneNumber)
                 .build();
 
         contactRepository.save(contact);

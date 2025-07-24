@@ -1,7 +1,8 @@
 package com.app.messenger.service.impl;
 
 import com.app.messenger.dto.NotifyUserEventDTO;
-import com.app.messenger.dto.UserDTO;
+import com.app.messenger.dto.UserRequestDTO;
+import com.app.messenger.dto.UserResponseDTO;
 import com.app.messenger.dto.UserSocketConnectionDTO;
 import com.app.messenger.dto.constant.KafkaConstant;
 import com.app.messenger.dto.enumeration.NotificationType;
@@ -17,7 +18,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.util.*;
 
 @Slf4j
@@ -31,7 +35,7 @@ public class UserServiceImpl implements UserService {
     private final KafkaTemplate<String, String> kafkaTemplate;
 
     @Override
-    public UserDTO getUserById(String phoneNumber) {
+    public UserResponseDTO getUserById(String phoneNumber) {
         Optional<User> userOptional = userRepository.findUserByPhoneNumber(phoneNumber);
         if (userOptional.isEmpty()) {
             throw BaseException.builder()
@@ -43,7 +47,7 @@ public class UserServiceImpl implements UserService {
 
         User user = userOptional.get();
 
-        return UserDTO.builder()
+        return UserResponseDTO.builder()
                 .username(user.getUsername())
                 .phoneNumber(user.getPhoneNumber())
                 .build();
@@ -64,13 +68,13 @@ public class UserServiceImpl implements UserService {
     }
 
     @Override
-    public void update(UserDTO userDTO) {
-        Optional<User> userOptional = userRepository.findUserByPhoneNumber(userDTO.getPhoneNumber());
+    public void update(UserRequestDTO userDTO, String phoneNumber) {
+        Optional<User> userOptional = userRepository.findUserByPhoneNumber(phoneNumber);
         if (userOptional.isEmpty()) {
             throw BaseException.builder()
                     .code(HttpStatus.NOT_FOUND.value())
                     .httpStatus(HttpStatus.NOT_FOUND)
-                    .message("User with phone number " + userDTO.getPhoneNumber() + " not found")
+                    .message("User with phone number " + phoneNumber + " not found")
                     .build();
         }
 
@@ -83,18 +87,25 @@ public class UserServiceImpl implements UserService {
         userRepository.save(user);
     }
 
+    @Transactional
     @Override
     public void updateUserOnlineStatus(String phoneNumber, NotificationType notificationType) {
         List<String> contactPhoneNumbers = contactRepository.getAllContactByUserPhoneNumberNative(phoneNumber);
         List<UserSocketConnectionDTO> userSocketConnectionDTOS = redisService.multiGet(contactPhoneNumbers, UserSocketConnectionDTO.class);
 
         Map<String, List<NotifyUserEventDTO>> notifyMap = new HashMap<>();
+        ZonedDateTime now = ZonedDateTime.now(ZoneId.of("Asia/Jakarta"));
+
+        if (notificationType.equals(NotificationType.USER_OFFLINE)) {
+            userRepository.updateUserLastSeen(phoneNumber, now);
+        }
 
         for (UserSocketConnectionDTO userEventDTO : userSocketConnectionDTOS) {
             NotifyUserEventDTO notifyUserEventDTO = NotifyUserEventDTO.builder()
                     .recipientPhoneNumber(userEventDTO.getPhoneNumber())
                     .senderPhoneNumber(phoneNumber)
                     .type(notificationType)
+                    .userLastSeen(now)
                     .build();
 
             if (notifyMap.containsKey(userEventDTO.getNodeId())) {

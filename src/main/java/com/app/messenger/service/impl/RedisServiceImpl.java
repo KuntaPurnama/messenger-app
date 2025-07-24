@@ -9,9 +9,7 @@ import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
-import java.util.Collections;
-import java.util.List;
-import java.util.Objects;
+import java.util.*;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -69,9 +67,20 @@ public class RedisServiceImpl implements RedisService {
     }
 
     @Override
-    public List<String> multiGet(List<String> keys) {
+    public <T> Set<T> multiGetSet(List<String> keys, Class<T> clazz) {
         List<String> rawList = redisTemplate.opsForValue().multiGet(keys);
-        if (rawList == null) return Collections.emptyList();
-        return rawList;
+        if (rawList == null) return new HashSet<>();
+
+        return rawList.stream()
+                .filter(Objects::nonNull)
+                .map(obj -> {
+                    try {
+                        return objectMapper.readValue(obj, clazz);
+                    } catch (JsonProcessingException e) {
+                        log.error("error when transform value of {}", obj);
+                    }
+                    return null;
+                })
+                .collect(Collectors.toSet());
     }
 }

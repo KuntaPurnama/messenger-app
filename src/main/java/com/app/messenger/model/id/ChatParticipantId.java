@@ -7,7 +7,7 @@ import java.util.Objects;
 
 @Data
 public class ChatParticipantId implements Serializable {
-    private String chatId;
+    private Long chatId;
     private String phoneNumber;
 
     // Must override equals and hashCode

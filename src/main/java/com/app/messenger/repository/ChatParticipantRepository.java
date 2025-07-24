@@ -14,4 +14,10 @@ public interface ChatParticipantRepository extends JpaRepository<ChatParticipant
     boolean existsChatParticipantByChatIdAndPhoneNumber(long chatId, String phoneNumber);
     List<ChatParticipant> findAllChatParticipantByChatId(long chatId);
     Optional<ChatParticipant> findChatParticipantByChatIdAndPhoneNumber(long chatId, String phoneNumber);
+
+    @Query(value = "SELECT cp.phone_number FROM chat_participants cp WHERE cp.chat_id = :chatId", nativeQuery = true)
+    List<String> findAllChatParticipantNumberOnlyByChatId(@Param("chatId") long chatId);
+
+    @Query(value = "SELECT cp.chat_id FROM chat_participants cp WHERE cp.phone_number = :phoneNumber", nativeQuery = true)
+    List<Long> findAllChatParticipantChatIdNumberByPhoneNumber(@Param("phoneNumber") String phoneNumber);
 }

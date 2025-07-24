@@ -1,6 +1,7 @@
 package com.app.messenger.controller;
 
 import com.app.messenger.dto.ChatDTO;
+import com.app.messenger.dto.ChatRequestDTO;
 import com.app.messenger.dto.MessageDTO;
 import com.app.messenger.dto.ResponseDTO;
 import com.app.messenger.service.ChatService;
@@ -18,9 +19,8 @@ public class ChatController {
     private final ChatService chatService;
 
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseDTO<Void> createChat(@RequestBody ChatDTO chatDTO, Principal principal) {
-        chatDTO.setCreatedBy(principal.getName());
-        chatService.createChat(chatDTO);
+    public ResponseDTO<Void> createChat(@RequestBody ChatRequestDTO chatDTO, Principal principal) {
+        chatService.createChat(chatDTO, principal.getName());
         return ResponseDTO.ok();
     }
 

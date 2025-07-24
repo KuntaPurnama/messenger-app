@@ -12,7 +12,7 @@ import lombok.*;
 @AllArgsConstructor
 @Entity
 @Builder
-@Table(name = "user_auth")
+@Table(name = "user_auths")
 public class UserAuth extends BaseEntity{
     @Id
     private String phoneNumber;

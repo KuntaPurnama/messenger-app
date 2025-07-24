@@ -4,5 +4,7 @@ public enum NotificationType {
     CHAT,
     USER_ONLINE,
     USER_OFFLINE,
-    USER_TYPING
+    USER_TYPING,
+    MESSAGE_READ,
+    MESSAGE_DELIVERED
 }

@@ -1,6 +1,7 @@
 package com.app.messenger.controller;
 
 import com.app.messenger.dto.ContactDTO;
+import com.app.messenger.dto.ContactRequestDTO;
 import com.app.messenger.dto.ResponseDTO;
 import com.app.messenger.service.ContactService;
 import lombok.RequiredArgsConstructor;
@@ -17,9 +18,8 @@ public class ContactController {
     private final ContactService contactService;
 
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseDTO<Void> addContact(@RequestBody ContactDTO contactDTO, Principal principal) {
-        contactDTO.setUserPhoneNumber(principal.getName());
-        contactService.addContact(contactDTO);
+    public ResponseDTO<Void> addContact(@RequestBody ContactRequestDTO contactDTO, Principal principal) {
+        contactService.addContact(contactDTO, principal.getName());
         return ResponseDTO.ok();
     }
 
@@ -29,7 +29,7 @@ public class ContactController {
         return ResponseDTO.ok(contactList);
     }
 
-    @DeleteMapping
+    @DeleteMapping("/{contactPhoneNumber}")
     public ResponseDTO<Void> deleteContact(@PathVariable String contactPhoneNumber, Principal principal) {
         ContactDTO contactDTO = ContactDTO.builder()
                 .userPhoneNumber(principal.getName())

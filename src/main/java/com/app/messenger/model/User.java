@@ -4,6 +4,8 @@ import com.app.messenger.dto.enumeration.UserStatusEnum;
 import jakarta.persistence.*;
 import lombok.*;
 
+import java.time.ZonedDateTime;
+
 @Setter
 @Getter
 @NoArgsConstructor
@@ -13,12 +15,12 @@ import lombok.*;
 @Table(name = "users")
 public class User extends BaseEntity {
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private long id;
-
-    @Column(name = "name")
-    private String username;
-
     @Column(name = "phone_number")
     private String phoneNumber;
+
+    @Column(name = "username")
+    private String username;
+
+    @Column(name = "last_seen_at")
+    private ZonedDateTime lastSeenAt;
 }

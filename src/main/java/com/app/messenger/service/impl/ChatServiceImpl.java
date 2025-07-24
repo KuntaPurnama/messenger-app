@@ -40,7 +40,7 @@ public class ChatServiceImpl implements ChatService {
 
     @Transactional
     @Override
-    public void createChat(ChatDTO chatDTO) {
+    public void createChat(ChatRequestDTO chatDTO, String phoneNumber) {
         //check if participant is empty
         if (Collections.isEmpty(chatDTO.getParticipantPhoneNumbers())) {
             throw BaseException.builder()
@@ -71,7 +71,7 @@ public class ChatServiceImpl implements ChatService {
 
             //check if chat already exists
             String participantPhoneNumber = chatDTO.getParticipantPhoneNumbers().get(0);
-            if (chatRepository.isPrivateChatExists(chatDTO.getCreatedBy(), participantPhoneNumber)){
+            if (chatRepository.isPrivateChatExists(Arrays.asList(phoneNumber, participantPhoneNumber))){
                 throw BaseException.builder()
                         .code(HttpStatus.CONFLICT.value())
                         .message("private chat already exists")
@@ -81,7 +81,7 @@ public class ChatServiceImpl implements ChatService {
         }
 
         Chat chat = chatRepository.save(Chat.builder()
-                .createdBy(chatDTO.getCreatedBy())
+                .createdBy(phoneNumber)
                 .name(chatDTO.getName())
                 .isGroup(chatDTO.isGroup())
                 .build());
@@ -95,7 +95,7 @@ public class ChatServiceImpl implements ChatService {
 
         chatParticipants.add(ChatParticipant.builder()
                 .chatId(chat.getId())
-                .phoneNumber(chatDTO.getCreatedBy()).build());
+                .phoneNumber(phoneNumber).build());
 
         chatParticipantRepository.saveAll(chatParticipants);
 
@@ -107,7 +107,7 @@ public class ChatServiceImpl implements ChatService {
             NotifyUserEventDTO notifyUserEventDTO = NotifyUserEventDTO.builder()
                     .chatId(chat.getId())
                     .recipientPhoneNumber(userEventDTO.getPhoneNumber())
-                    .senderPhoneNumber(chatDTO.getCreatedBy())
+                    .senderPhoneNumber(phoneNumber)
                     .type(NotificationType.CHAT)
                     .build();
 
@@ -158,7 +158,8 @@ public class ChatServiceImpl implements ChatService {
 
     @Override
     public List<ChatDTO> getListChat(String phoneNumber) {
-        return chatParticipantRepository.findAllChatWithParticipantByPhoneNumber(phoneNumber).stream()
+        List<Long> chatIds = chatParticipantRepository.findAllChatParticipantChatIdNumberByPhoneNumber(phoneNumber);
+        return chatRepository.getChatWithParticipantWithIds(chatIds).stream()
                 .map(this::convertChatParticipantEntityToDTO)
                 .collect(Collectors.toList());
     }
@@ -166,7 +167,7 @@ public class ChatServiceImpl implements ChatService {
     @Override
     public List<String> getChatParticipants(long chatId, String phoneNumber) {
         //check if phone number part of the participant
-        if (chatParticipantRepository.existsChatParticipantByChatIdAndPhoneNumber(chatId, phoneNumber)) {
+        if (!chatParticipantRepository.existsChatParticipantByChatIdAndPhoneNumber(chatId, phoneNumber)) {
             throw BaseException.builder()
                     .httpStatus(HttpStatus.NOT_FOUND)
                     .code(HttpStatus.NOT_FOUND.value())
@@ -194,11 +195,14 @@ public class ChatServiceImpl implements ChatService {
                 .collect(Collectors.toList());
     }
 
-    private ChatDTO convertChatParticipantEntityToDTO(ChatParticipant chatParticipant) {
-        Chat chat = chatParticipant.getChat();
+    private ChatDTO convertChatParticipantEntityToDTO(Chat chat) {
         ChatDTO chatDTO = new ChatDTO();
         BeanUtils.copyProperties(chat, chatDTO);
 
+        List<String> numberDTOs = chat.getChatParticipants().stream()
+                .map(ChatParticipant::getPhoneNumber).collect(Collectors.toList());
+
+        chatDTO.setParticipantPhoneNumbers(numberDTOs);
         return chatDTO;
     }
 

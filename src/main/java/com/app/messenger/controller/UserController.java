@@ -1,7 +1,8 @@
 package com.app.messenger.controller;
 
 import com.app.messenger.dto.ResponseDTO;
-import com.app.messenger.dto.UserDTO;
+import com.app.messenger.dto.UserRequestDTO;
+import com.app.messenger.dto.UserResponseDTO;
 import com.app.messenger.service.UserService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
@@ -10,15 +11,15 @@ import org.springframework.web.bind.annotation.*;
 import java.security.Principal;
 
 @RestController
-@RequestMapping(name = "/api/v1/user")
+@RequestMapping( "/api/v1/user")
 @RequiredArgsConstructor
 public class UserController {
 
     private final UserService userService;
 
     @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseDTO<UserDTO> login(Principal principal) {
-        UserDTO userDTO = userService.getUserById(principal.getName());
+    public ResponseDTO<UserResponseDTO> getUser(Principal principal) {
+        UserResponseDTO userDTO = userService.getUserById(principal.getName());
         return ResponseDTO.ok(userDTO);
     }
 
@@ -29,9 +30,8 @@ public class UserController {
     }
 
     @PutMapping
-    public ResponseDTO<Void> updateUser(Principal principal, @RequestBody UserDTO userDTO) {
-        userDTO.setPhoneNumber(principal.getName());
-        userService.update(userDTO);
+    public ResponseDTO<Void> updateUser(Principal principal, @RequestBody UserRequestDTO userDTO) {
+        userService.update(userDTO, principal.getName());
         return ResponseDTO.ok();
     }
 }

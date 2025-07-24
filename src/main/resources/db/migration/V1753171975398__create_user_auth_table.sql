@@ -1,6 +1,5 @@
 CREATE TABLE IF NOT EXISTS user_auths (
-    id BIGSERIAL PRIMARY KEY,
-    phone_number VARCHAR(15) NOT NULL
+    phone_number VARCHAR(20) PRIMARY KEY NOT NULL
         CONSTRAINT user_auths_phone_number_fk_key
         REFERENCES users(phone_number),
     password VARCHAR(255) NOT NULL,

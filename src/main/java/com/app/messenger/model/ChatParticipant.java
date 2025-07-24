@@ -15,13 +15,13 @@ import lombok.*;
 public class ChatParticipant extends BaseEntity{
     @Id
     @Column(name = "chat_id")
-    private long chatId;
+    private Long chatId;
 
     @Id
     @Column(name = "phone_number")
     private String phoneNumber;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "chat_id")
+    @JoinColumn(name = "chat_id", insertable = false, updatable = false)
     private Chat chat;
 }

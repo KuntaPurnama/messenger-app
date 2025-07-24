@@ -2,7 +2,9 @@ package com.app.messenger.service.impl;
 
 import com.app.messenger.dto.*;
 import com.app.messenger.dto.constant.KafkaConstant;
+import com.app.messenger.dto.constant.RedisConstant;
 import com.app.messenger.dto.enumeration.MessageStatusEnum;
+import com.app.messenger.dto.enumeration.NotificationType;
 import com.app.messenger.error.exception.BaseException;
 import com.app.messenger.model.ChatParticipant;
 import com.app.messenger.model.Message;
@@ -14,9 +16,12 @@ import com.app.messenger.repository.MessageAttachmentRepository;
 import com.app.messenger.repository.MessageRepository;
 import com.app.messenger.service.MessageService;
 import com.app.messenger.service.RedisService;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
@@ -24,11 +29,13 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
 import java.util.stream.Collectors;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class MessageServiceImpl implements MessageService {
@@ -39,18 +46,19 @@ public class MessageServiceImpl implements MessageService {
     private final RedisService redisService;
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final ObjectMapper objectMapper;
+    private final RedisTemplate<String, String> redisTemplate;
 
     @Value("${app.node-id}")
     private String nodeId;
 
     private static final long MAX_FILE_SIZE = 5 * 1024 * 1024; //5 MB
-    private static final String MESSAGE_UPLOAD_PATH = "/file/attachment";
+    private static final String MESSAGE_UPLOAD_PATH = System.getProperty("user.dir") + "/attachment";
 
     @Transactional
     @Override
-    public void sendMessage(MessageDTO dto) {
+    public void sendMessage(MessageRequestDTO dto, String phoneNumber) {
         //check if chat exists or user part of the participant
-        Optional<ChatParticipant> chatParticipantOptional = chatParticipantRepository.findChatParticipantByChatIdAndPhoneNumber(dto.getChatId(), dto.getSenderPhoneNumber());
+        Optional<ChatParticipant> chatParticipantOptional = chatParticipantRepository.findChatParticipantByChatIdAndPhoneNumber(dto.getChatId(), phoneNumber);
         if (chatParticipantOptional.isEmpty()) {
             throw BaseException.builder()
                     .code(HttpStatus.NOT_FOUND.value())
@@ -62,49 +70,62 @@ public class MessageServiceImpl implements MessageService {
         Message message = messageRepository.save(Message.builder()
                 .chatId(dto.getChatId())
                 .content(dto.getContent())
-                .senderPhoneNumber(dto.getSenderPhoneNumber())
+                .senderPhoneNumber(phoneNumber)
                 .build());
 
         //create default message activity for each participant
-        List<ChatParticipant> chatParticipants = chatParticipantRepository.findAllChatParticipantByChatId(dto.getChatId());
+        List<String> chatParticipantNumbers = chatParticipantRepository.findAllChatParticipantNumberOnlyByChatId(dto.getChatId());
+        List<String> redisKeys = chatParticipantNumbers.stream()
+                .map(s -> RedisConstant.USER_SOCKET_PREFIX + s)
+                .collect(Collectors.toList());
 
-        List<String> participantPhoneNumbers = new ArrayList<>();
+        List<String> rawList = redisTemplate.opsForValue().multiGet(redisKeys);
+        if (Objects.isNull(rawList)) {
+            rawList = new ArrayList<>();
+        }
+
+        Set<String> onlineUsers = new HashSet<>();
+        Set<String> userNodes = new HashSet<>();
+
+        for (String raw: rawList) {
+            try {
+                UserSocketConnectionDTO userSocketConnectionDTO = objectMapper.readValue(raw, UserSocketConnectionDTO.class);
+                onlineUsers.add(userSocketConnectionDTO.getPhoneNumber());
+                userNodes.add(userSocketConnectionDTO.getNodeId());
+            }catch (JsonProcessingException e){
+                log.error("error convert to json");
+            }
+        }
+
         List<MessageActivity> messageActivities =  new ArrayList<>();
-        for (ChatParticipant chatParticipant : chatParticipants) {
-            participantPhoneNumbers.add(chatParticipant.getPhoneNumber());
-
-            if (chatParticipant.getPhoneNumber().equals(dto.getSenderPhoneNumber())) {
+        for (String number : chatParticipantNumbers) {
+            if (number.equals(phoneNumber)) {
                 continue;
             }
-            MessageActivity messageActivity = createDefaultMessageActivityEntity(chatParticipant.getPhoneNumber(), message.getId());
+
+            MessageStatusEnum messageStatusEnum = onlineUsers.contains(number) ? MessageStatusEnum.DELIVERED : MessageStatusEnum.SENT;
+            MessageActivity messageActivity = createDefaultMessageActivityEntity(number, message.getId(), messageStatusEnum);
             messageActivities.add(messageActivity);
         }
 
-        List<MessageAttachment> messageAttachments = dto.getAttachments().stream()
-                        .map(attch -> convertAttachmentDTOToEntity(attch, message.getId()))
-                        .collect(Collectors.toList());
+        if (Objects.nonNull(dto.getAttachmentURLs())){
+            List<MessageAttachment> messageAttachments = dto.getAttachmentURLs().stream()
+                    .map(attch -> convertAttachmentDTOToEntity(attch, message.getId()))
+                    .collect(Collectors.toList());
+            messageAttachments = messageAttachmentRepository.saveAll(messageAttachments);
+            message.setMessageAttachments(messageAttachments);
+        }
 
         messageActivities = messageActivityRepository.saveAll(messageActivities);
-        messageAttachments = messageAttachmentRepository.saveAll(messageAttachments);
-
-        //get participant node-connection
-        List<UserSocketConnectionDTO> userSocketConnectionDTOS = redisService.multiGet(participantPhoneNumbers, UserSocketConnectionDTO.class);
-        Set<String> nodeSet = new HashSet<>();
-
         message.setMessageActivities(messageActivities);
-        message.setMessageAttachments(messageAttachments);
 
         MessageEventDTO messageEventDTO = objectMapper.convertValue(message, MessageEventDTO.class);
 
         try{
             String messageString = objectMapper.writeValueAsString(messageEventDTO);
 
-            for (UserSocketConnectionDTO userEventDTO : userSocketConnectionDTOS) {
-                if (nodeSet.contains(userEventDTO.getNodeId())) {
-                    continue;
-                }
-                nodeSet.add(userEventDTO.getNodeId());
-                kafkaTemplate.send(KafkaConstant.KAFKA_CHAT_MESSAGE_PREFIX + nodeId, messageString);
+            for (String node: userNodes) {
+                kafkaTemplate.send(KafkaConstant.KAFKA_CHAT_MESSAGE_PREFIX + node, messageString);
             }
         } catch (Exception e) {
             throw new RuntimeException("Failed to send message", e);
@@ -201,7 +222,7 @@ public class MessageServiceImpl implements MessageService {
 
             try {
                 Path filePath = Paths.get(MESSAGE_UPLOAD_PATH, filename);
-                file.transferTo(filePath.toFile());
+                Files.write(filePath, file.getBytes());
 
                 MessageAttachmentDTO messageAttachmentDTO = new MessageAttachmentDTO();
                 messageAttachmentDTO.setFileSize(file.getSize());
@@ -230,31 +251,154 @@ public class MessageServiceImpl implements MessageService {
         return messageRepository.countListUndeliveredMessage(chatId, phoneNumber);
     }
 
+    @Transactional
     @Override
     public List<MessageDTO> getUndeliveredMessage(long chatId, String phoneNumber) {
         if (!chatParticipantRepository.existsChatParticipantByChatIdAndPhoneNumber(chatId, phoneNumber)) {
             return new  ArrayList<>();
         }
 
-        return messageRepository.getListUndeliveredMessage(chatId, phoneNumber).stream()
-                .map(m -> objectMapper.convertValue(m, MessageDTO.class))
-                .collect(Collectors.toList());
+        List<MessageDTO> messageDTOS = new ArrayList<>();
+        List<Message> messages = messageRepository.getListUndeliveredMessage(chatId, phoneNumber);
+        List<Long> messageIds = new ArrayList<>();
+        for (Message message : messages) {
+            MessageDTO messageDTO = objectMapper.convertValue(message, MessageDTO.class);
+            messageDTOS.add(messageDTO);
+
+            messageIds.add(message.getId());
+        }
+
+        //update activity to read
+        messageActivityRepository.updateMessageActivityStatus(messageIds, phoneNumber, MessageStatusEnum.DELIVERED.name());
+
+        //notify user
+        List<String> chatParticipantNumbers = chatParticipantRepository.findAllChatParticipantNumberOnlyByChatId(chatId);
+        List<UserSocketConnectionDTO> userSocketConnectionDTOS = redisService.multiGet(chatParticipantNumbers, UserSocketConnectionDTO.class);
+
+        Map<String, List<NotifyUserEventDTO>> notifyMap = new HashMap<>();
+
+        for (UserSocketConnectionDTO userEventDTO : userSocketConnectionDTOS) {
+            NotifyUserEventDTO notifyUserEventDTO = NotifyUserEventDTO.builder()
+                    .chatId(chatId)
+                    .recipientPhoneNumber(userEventDTO.getPhoneNumber())
+                    .senderPhoneNumber(phoneNumber)
+                    .type(NotificationType.MESSAGE_DELIVERED)
+                    .build();
+
+            if (notifyMap.containsKey(userEventDTO.getNodeId())) {
+                List<NotifyUserEventDTO> notifyUserEventDTOS = notifyMap.get(userEventDTO.getNodeId());
+                notifyUserEventDTOS.add(notifyUserEventDTO);
+            }else {
+                List<NotifyUserEventDTO> notifyUserEventDTOS = new LinkedList<>();
+                notifyUserEventDTOS.add(notifyUserEventDTO);
+                notifyMap.put(userEventDTO.getNodeId(), notifyUserEventDTOS);
+            }
+        }
+
+        //publish to related node
+        for (Map.Entry<String, List<NotifyUserEventDTO>> entry : notifyMap.entrySet()) {
+            try {
+                String topic = KafkaConstant.KAFKA_USER_NOTIFY_PREFIX + entry.getKey();
+                String json =  objectMapper.writeValueAsString(entry.getValue());
+                kafkaTemplate.send(topic, json);
+            }catch (Exception e) {
+                log.error("error transform to string for node {}", entry.getKey(), e);
+            }
+        }
+
+        return messageDTOS;
     }
 
-    private MessageActivity createDefaultMessageActivityEntity(String participantPhoneNumber, long messageId) {
+    @Transactional
+    @Override
+    public void updateMessageActivityStatusToRead(long chatId, String phoneNumber) {
+        List<Long> messageIds = messageRepository.getListUnreadMessageId(chatId, phoneNumber);
+        messageActivityRepository.updateMessageActivityStatus(messageIds, phoneNumber,  MessageStatusEnum.READ.name());
+
+        //notify user
+        List<String> chatParticipantNumbers = chatParticipantRepository.findAllChatParticipantNumberOnlyByChatId(chatId);
+        List<UserSocketConnectionDTO> userSocketConnectionDTOS = redisService.multiGet(chatParticipantNumbers, UserSocketConnectionDTO.class);
+        Map<String, List<NotifyUserEventDTO>> notifyMap = new HashMap<>();
+
+        for (UserSocketConnectionDTO userEventDTO : userSocketConnectionDTOS) {
+            NotifyUserEventDTO notifyUserEventDTO = NotifyUserEventDTO.builder()
+                    .chatId(chatId)
+                    .recipientPhoneNumber(userEventDTO.getPhoneNumber())
+                    .senderPhoneNumber(phoneNumber)
+                    .type(NotificationType.MESSAGE_READ)
+                    .build();
+
+            if (notifyMap.containsKey(userEventDTO.getNodeId())) {
+                List<NotifyUserEventDTO> notifyUserEventDTOS = notifyMap.get(userEventDTO.getNodeId());
+                notifyUserEventDTOS.add(notifyUserEventDTO);
+            }else {
+                List<NotifyUserEventDTO> notifyUserEventDTOS = new LinkedList<>();
+                notifyUserEventDTOS.add(notifyUserEventDTO);
+                notifyMap.put(userEventDTO.getNodeId(), notifyUserEventDTOS);
+            }
+        }
+
+        //publish to related node
+        for (Map.Entry<String, List<NotifyUserEventDTO>> entry : notifyMap.entrySet()) {
+            try {
+                String topic = KafkaConstant.KAFKA_USER_NOTIFY_PREFIX + entry.getKey();
+                String json =  objectMapper.writeValueAsString(entry.getValue());
+                kafkaTemplate.send(topic, json);
+            }catch (Exception e) {
+                log.error("error transform to string for node {}", entry.getKey(), e);
+            }
+        }
+    }
+
+    @Override
+    public void notifyUserTypingStatus(UserTypingStatusDTO dto, String phoneNumber) {
+        //notify user
+        List<String> chatParticipantNumbers = chatParticipantRepository.findAllChatParticipantNumberOnlyByChatId(dto.getChatId());
+        List<UserSocketConnectionDTO> userSocketConnectionDTOS = redisService.multiGet(chatParticipantNumbers, UserSocketConnectionDTO.class);
+        Map<String, List<NotifyUserEventDTO>> notifyMap = new HashMap<>();
+
+        for (UserSocketConnectionDTO userEventDTO : userSocketConnectionDTOS) {
+            NotifyUserEventDTO notifyUserEventDTO = NotifyUserEventDTO.builder()
+                    .chatId(dto.getChatId())
+                    .recipientPhoneNumber(userEventDTO.getPhoneNumber())
+                    .senderPhoneNumber(phoneNumber)
+                    .type(NotificationType.USER_TYPING)
+                    .build();
+
+            if (notifyMap.containsKey(userEventDTO.getNodeId())) {
+                List<NotifyUserEventDTO> notifyUserEventDTOS = notifyMap.get(userEventDTO.getNodeId());
+                notifyUserEventDTOS.add(notifyUserEventDTO);
+            }else {
+                List<NotifyUserEventDTO> notifyUserEventDTOS = new LinkedList<>();
+                notifyUserEventDTOS.add(notifyUserEventDTO);
+                notifyMap.put(userEventDTO.getNodeId(), notifyUserEventDTOS);
+            }
+        }
+
+        //publish to related node
+        for (Map.Entry<String, List<NotifyUserEventDTO>> entry : notifyMap.entrySet()) {
+            try {
+                String topic = KafkaConstant.KAFKA_USER_NOTIFY_PREFIX + entry.getKey();
+                String json =  objectMapper.writeValueAsString(entry.getValue());
+                kafkaTemplate.send(topic, json);
+            }catch (Exception e) {
+                log.error("error transform to string for node {}", entry.getKey(), e);
+            }
+        }
+    }
+
+    private MessageActivity createDefaultMessageActivityEntity(String participantPhoneNumber, long messageId, MessageStatusEnum messageStatus) {
         return MessageActivity.builder()
                 .messageId(messageId)
-                .status(MessageStatusEnum.SENT)
+                .status(messageStatus)
                 .userPhoneNumber(participantPhoneNumber)
                 .build();
     }
 
-    private MessageAttachment convertAttachmentDTOToEntity(MessageAttachmentDTO dto, long messageId) {
+    private MessageAttachment convertAttachmentDTOToEntity(String url, long messageId) {
         return MessageAttachment.builder()
                 .messageId(messageId)
-                .fileSize(dto.getFileSize())
-                .fileType(dto.getFileType())
-                .fileUrl(dto.getFileUrl())
+                .fileUrl(url)
                 .build();
     }
 }
