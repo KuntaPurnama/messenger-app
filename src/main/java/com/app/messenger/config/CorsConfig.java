@@ -34,7 +34,7 @@ public class CorsConfig {
         config.addAllowedHeader("*");
         config.addAllowedMethod("*");
 
-        source.registerCorsConfiguration("/v2/api-docs", config);
+        source.registerCorsConfiguration("/v23/api-docs", config);
         return new CorsFilter(source);
     }
 }
