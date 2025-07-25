@@ -7,6 +7,7 @@ import com.app.messenger.service.UserService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.security.Principal;
 
@@ -21,6 +22,12 @@ public class UserController {
     public ResponseDTO<UserResponseDTO> getUser(Principal principal) {
         UserResponseDTO userDTO = userService.getUserById(principal.getName());
         return ResponseDTO.ok(userDTO);
+    }
+
+    @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseDTO<Void> handleUpload(@RequestParam("files") MultipartFile file, Principal principal) {
+        userService.uploadProfilePicture(file, principal.getName());
+        return ResponseDTO.ok();
     }
 
     @DeleteMapping

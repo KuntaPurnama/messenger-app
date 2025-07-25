@@ -21,6 +21,9 @@ public class User extends BaseEntity {
     @Column(name = "username")
     private String username;
 
+    @Column(name = "profile_image_url")
+    private String profileImageUrl;
+
     @Column(name = "last_seen_at")
     private ZonedDateTime lastSeenAt;
 }

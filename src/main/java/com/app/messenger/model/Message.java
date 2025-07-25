@@ -20,6 +20,10 @@ public class Message extends BaseEntity{
     @Column(name = "chat_id")
     private long chatId;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "chat_id", insertable = false, updatable = false)
+    private Chat chat;
+
     @Column(name = "content")
     private String content;
 

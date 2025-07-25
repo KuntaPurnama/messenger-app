@@ -28,4 +28,7 @@ public class Chat extends BaseEntity{
 
     @OneToMany(mappedBy = "chat", fetch = FetchType.LAZY, cascade = CascadeType.ALL)
     private List<ChatParticipant> chatParticipants;
+
+    @OneToMany(mappedBy = "chat", fetch = FetchType.LAZY, cascade = CascadeType.ALL)
+    private List<Message> messages;
 }

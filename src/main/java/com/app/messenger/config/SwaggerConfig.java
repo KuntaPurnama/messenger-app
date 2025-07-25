@@ -14,7 +14,7 @@ public class SwaggerConfig {
         final String securitySchemeName = "bearerAuth";
 
         return new OpenAPI()
-                .info(new Info().title("My API").version("v1"))
+                .info(new Info().title("Messenger API").version("v1"))
                 .addSecurityItem(new SecurityRequirement().addList(securitySchemeName))
                 .components(
                         new io.swagger.v3.oas.models.Components()

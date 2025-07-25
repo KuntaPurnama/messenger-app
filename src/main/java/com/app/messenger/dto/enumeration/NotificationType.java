@@ -6,5 +6,6 @@ public enum NotificationType {
     USER_OFFLINE,
     USER_TYPING,
     MESSAGE_READ,
-    MESSAGE_DELIVERED
+    MESSAGE_DELIVERED,
+    UNSUBSCRIBE,
 }

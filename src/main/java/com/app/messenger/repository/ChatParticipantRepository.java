@@ -1,6 +1,8 @@
 package com.app.messenger.repository;
 
 import com.app.messenger.model.ChatParticipant;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -12,7 +14,7 @@ public interface ChatParticipantRepository extends JpaRepository<ChatParticipant
     @Query("SELECT DISTINCT cp FROM ChatParticipant cp LEFT JOIN FETCH cp.chat WHERE cp.phoneNumber = :phoneNumber")
     List<ChatParticipant> findAllChatWithParticipantByPhoneNumber(@Param("phoneNumber") String phoneNumber);
     boolean existsChatParticipantByChatIdAndPhoneNumber(long chatId, String phoneNumber);
-    List<ChatParticipant> findAllChatParticipantByChatId(long chatId);
+    Page<ChatParticipant> findAllChatParticipantByChatId(long chatId, Pageable pageable);
     Optional<ChatParticipant> findChatParticipantByChatIdAndPhoneNumber(long chatId, String phoneNumber);
 
     @Query(value = "SELECT cp.phone_number FROM chat_participants cp WHERE cp.chat_id = :chatId", nativeQuery = true)

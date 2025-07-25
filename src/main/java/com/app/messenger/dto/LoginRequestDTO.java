@@ -1,6 +1,6 @@
 package com.app.messenger.dto;
 
-import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import lombok.Builder;
 import lombok.Data;
@@ -8,10 +8,9 @@ import lombok.Data;
 @Data
 @Builder
 public class LoginRequestDTO {
-    @NotNull(message = "Phone number can't be null")
-    @NotEmpty(message = "Phone number can't be empty")
+    @NotBlank(message = "Phone number can't be empty")
     private String phoneNumber;
 
-    @NotNull(message = "Password must not be null")
+    @NotBlank(message = "Password must can't be empty")
     private String password;
 }
