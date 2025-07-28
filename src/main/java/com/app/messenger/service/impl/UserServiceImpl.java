@@ -4,6 +4,7 @@ import com.app.messenger.dto.*;
 import com.app.messenger.dto.constant.KafkaConstant;
 import com.app.messenger.dto.enumeration.NotificationType;
 import com.app.messenger.error.exception.BaseException;
+import com.app.messenger.helper.WebSocketHelper;
 import com.app.messenger.model.User;
 import com.app.messenger.repository.ContactRepository;
 import com.app.messenger.repository.UserRepository;
@@ -35,10 +36,9 @@ import java.util.*;
 @RequiredArgsConstructor
 public class UserServiceImpl implements UserService {
     private final UserRepository userRepository;
-    private final RedisService redisService;
     private final ContactRepository contactRepository;
-    private final ObjectMapper objectMapper;
     private final KafkaTemplate<String, String> kafkaTemplate;
+    private final WebSocketHelper webSocketHelper;
 
     private static final long MAX_FILE_SIZE = 10 * 1024 * 1024; //5 MB
 
@@ -115,38 +115,7 @@ public class UserServiceImpl implements UserService {
         if (CollectionUtils.isEmpty(contactPhoneNumbers)) {
             return;
         }
-        List<UserSocketConnectionDTO> userSocketConnectionDTOS = redisService.multiGet(contactPhoneNumbers, UserSocketConnectionDTO.class);
-
-        Map<String, List<NotifyUserEventDTO>> notifyMap = new HashMap<>();
-
-        for (UserSocketConnectionDTO userEventDTO : userSocketConnectionDTOS) {
-            NotifyUserEventDTO notifyUserEventDTO = NotifyUserEventDTO.builder()
-                    .recipientPhoneNumber(userEventDTO.getPhoneNumber())
-                    .senderPhoneNumber(phoneNumber)
-                    .type(notificationType)
-                    .userLastSeen(now)
-                    .build();
-
-            if (notifyMap.containsKey(userEventDTO.getNodeId())) {
-                List<NotifyUserEventDTO> notifyUserEventDTOS = notifyMap.get(userEventDTO.getNodeId());
-                notifyUserEventDTOS.add(notifyUserEventDTO);
-            }else {
-                List<NotifyUserEventDTO> notifyUserEventDTOS = new LinkedList<>();
-                notifyUserEventDTOS.add(notifyUserEventDTO);
-                notifyMap.put(userEventDTO.getNodeId(), notifyUserEventDTOS);
-            }
-        }
-
-        //publish to related node
-        for (Map.Entry<String, List<NotifyUserEventDTO>> entry : notifyMap.entrySet()) {
-            try {
-                String topic = KafkaConstant.KAFKA_USER_NOTIFY_PREFIX + entry.getKey();
-                String json =  objectMapper.writeValueAsString(entry.getValue());
-                kafkaTemplate.send(topic, json);
-            }catch (Exception e) {
-                log.error("error transform to string for node {}", entry.getKey(), e);
-            }
-        }
+        webSocketHelper.forwardMessageEventP2P(contactPhoneNumbers, null, phoneNumber, notificationType);
     }
 
     @Override

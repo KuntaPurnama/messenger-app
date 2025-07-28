@@ -1,14 +1,12 @@
 package com.app.messenger.service.impl;
 
 import com.app.messenger.dto.*;
-import com.app.messenger.dto.constant.KafkaConstant;
 import com.app.messenger.dto.enumeration.NotificationType;
 import com.app.messenger.error.exception.BaseException;
+import com.app.messenger.helper.WebSocketHelper;
 import com.app.messenger.model.*;
 import com.app.messenger.repository.*;
 import com.app.messenger.service.ChatService;
-import com.app.messenger.service.RedisService;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import io.jsonwebtoken.lang.Collections;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -16,7 +14,6 @@ import org.springframework.beans.BeanUtils;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
-import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import java.util.*;
@@ -29,12 +26,10 @@ public class ChatServiceImpl implements ChatService {
     private final ChatRepository chatRepository;
     private final MessageRepository messageRepository;
     private final ChatParticipantRepository chatParticipantRepository;
-    private final RedisService redisService;
-    private final KafkaTemplate<String, String> kafkaTemplate;
-    private final ObjectMapper objectMapper;
     private final UserRepository userRepository;
     private final MessageAttachmentRepository messageAttachmentRepository;
     private final MessageActivityRepository messageActivityRepository;
+    private final WebSocketHelper webSocketHelper;
 
     @Transactional
     @Override
@@ -98,37 +93,7 @@ public class ChatServiceImpl implements ChatService {
         chatParticipantRepository.saveAll(chatParticipants);
 
         //notify all participants
-        List<UserSocketConnectionDTO> userSocketConnectionDTOS = redisService.multiGet(chatDTO.getParticipantPhoneNumbers(), UserSocketConnectionDTO.class);
-        Map<String, List<NotifyUserEventDTO>> notifyMap = new HashMap<>();
-
-        for (UserSocketConnectionDTO userEventDTO : userSocketConnectionDTOS) {
-            NotifyUserEventDTO notifyUserEventDTO = NotifyUserEventDTO.builder()
-                    .chatId(chat.getId())
-                    .recipientPhoneNumber(userEventDTO.getPhoneNumber())
-                    .senderPhoneNumber(phoneNumber)
-                    .type(NotificationType.CHAT)
-                    .build();
-
-            if (notifyMap.containsKey(userEventDTO.getNodeId())) {
-                List<NotifyUserEventDTO> notifyUserEventDTOS = notifyMap.get(userEventDTO.getNodeId());
-                notifyUserEventDTOS.add(notifyUserEventDTO);
-            }else {
-                List<NotifyUserEventDTO> notifyUserEventDTOS = new LinkedList<>();
-                notifyUserEventDTOS.add(notifyUserEventDTO);
-                notifyMap.put(userEventDTO.getNodeId(), notifyUserEventDTOS);
-            }
-        }
-
-        //publish to related node
-        for (Map.Entry<String, List<NotifyUserEventDTO>> entry : notifyMap.entrySet()) {
-            try {
-                String topic = KafkaConstant.KAFKA_USER_NOTIFY_PREFIX + entry.getKey();
-                String json =  objectMapper.writeValueAsString(entry.getValue());
-                kafkaTemplate.send(topic, json);
-            }catch (Exception e) {
-                log.error("error transform to string for node {}", entry.getKey(), e);
-            }
-        }
+        webSocketHelper.forwardMessageEventP2P(chatDTO.getParticipantPhoneNumbers(), chat.getId(), phoneNumber, NotificationType.CHAT);
     }
 
     @Override
@@ -209,23 +174,6 @@ public class ChatServiceImpl implements ChatService {
 
         ChatParticipant chatParticipant = chatParticipantOptional.get();
         chatParticipantRepository.delete(chatParticipant);
-
-//        //notify this user
-//        String key = RedisConstant.USER_SOCKET_PREFIX + phoneNumber;
-//        UserSocketConnectionDTO userSocketConnectionDTO = redisService.get(key, UserSocketConnectionDTO.class);
-//
-//        NotifyUserEventDTO userEventDTO = NotifyUserEventDTO.builder()
-//                .chatId(chatParticipant.getChatId())
-//                .senderPhoneNumber(phoneNumber)
-//                .type(NotificationType.UNSUBSCRIBE)
-//                .build();
-//
-//        try {
-//            String payload = objectMapper.writeValueAsString(userEventDTO);
-//            kafkaTemplate.send(KafkaConstant.KAFKA_USER_NOTIFY_PREFIX + userSocketConnectionDTO.getNodeId(), payload);
-//        }catch (Exception e) {
-//            log.error("error transform to string for node {}", userSocketConnectionDTO.getNodeId(), e);
-//        }
     }
 
     @Transactional
@@ -347,31 +295,6 @@ public class ChatServiceImpl implements ChatService {
 
         chatDTO.setParticipantPhoneNumbers(numberDTOs);
         return chatDTO;
-    }
-
-    private MessageDTO convertMessageEntityToDTO(Message message) {
-        MessageDTO messageDTO = new MessageDTO();
-        BeanUtils.copyProperties(message, messageDTO);
-
-        List<MessageActivityDTO> messageActivityDTOS = message.getMessageActivities().stream()
-                        .map(activity -> {
-                            MessageActivityDTO messageActivityDTO = new MessageActivityDTO();
-                            BeanUtils.copyProperties(activity, messageActivityDTO);
-                            return  messageActivityDTO;
-                        })
-                        .collect(Collectors.toList());
-
-        List<MessageAttachmentDTO> messageAttachmentDTOS = message.getMessageAttachments().stream()
-                        .map(attachment -> {
-                            MessageAttachmentDTO messageAttachmentDTO = new MessageAttachmentDTO();
-                            BeanUtils.copyProperties(attachment, messageAttachmentDTO);
-                            return messageAttachmentDTO;
-                        }).collect(Collectors.toList());
-
-        messageDTO.setActivities(messageActivityDTOS);
-        messageDTO.setAttachments(messageAttachmentDTOS);
-
-        return messageDTO;
     }
 
     private UserDetailResponseDTO convertChatParticipantEntityToDTO(User user) {

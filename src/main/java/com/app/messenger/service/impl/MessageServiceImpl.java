@@ -1,11 +1,11 @@
 package com.app.messenger.service.impl;
 
 import com.app.messenger.dto.*;
-import com.app.messenger.dto.constant.KafkaConstant;
 import com.app.messenger.dto.constant.RedisConstant;
 import com.app.messenger.dto.enumeration.MessageStatusEnum;
 import com.app.messenger.dto.enumeration.NotificationType;
 import com.app.messenger.error.exception.BaseException;
+import com.app.messenger.helper.WebSocketHelper;
 import com.app.messenger.model.ChatParticipant;
 import com.app.messenger.model.Message;
 import com.app.messenger.model.MessageActivity;
@@ -15,7 +15,6 @@ import com.app.messenger.repository.MessageActivityRepository;
 import com.app.messenger.repository.MessageAttachmentRepository;
 import com.app.messenger.repository.MessageRepository;
 import com.app.messenger.service.MessageService;
-import com.app.messenger.service.RedisService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -27,7 +26,6 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.http.HttpStatus;
-import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -49,13 +47,9 @@ public class MessageServiceImpl implements MessageService {
     private final MessageRepository messageRepository;
     private final MessageActivityRepository messageActivityRepository;
     private final MessageAttachmentRepository messageAttachmentRepository;
-    private final RedisService redisService;
-    private final KafkaTemplate<String, String> kafkaTemplate;
     private final ObjectMapper objectMapper;
     private final RedisTemplate<String, String> redisTemplate;
-
-    @Value("${app.node-id}")
-    private String nodeId;
+    private final WebSocketHelper webSocketHelper;
 
     private static final long MAX_FILE_SIZE = 10 * 1024 * 1024; //5 MB
     private final Path rootDir = Paths.get(System.getProperty("user.dir"));
@@ -126,28 +120,22 @@ public class MessageServiceImpl implements MessageService {
             messageActivities.add(messageActivity);
         }
 
+        MessageEventDTO messageEventDTO = new MessageEventDTO();
+        BeanUtils.copyProperties(message, messageEventDTO);
         if (Objects.nonNull(dto.getAttachmentURLs())){
             List<MessageAttachment> messageAttachments = dto.getAttachmentURLs().stream()
                     .map(attch -> convertAttachmentDTOToEntity(attch, message.getId()))
                     .collect(Collectors.toList());
             messageAttachments = messageAttachmentRepository.saveAll(messageAttachments);
-            message.setMessageAttachments(messageAttachments);
+
+            messageEventDTO.setAttachments(messageAttachments.stream().map(this::convertAttachmentEntityToDTO).collect(Collectors.toList()));
         }
 
         messageActivities = messageActivityRepository.saveAll(messageActivities);
-        message.setMessageActivities(messageActivities);
+        messageEventDTO.setActivities(messageActivities.stream().map(this::convertMessageActivityEntityToDTO).collect(Collectors.toList()));
 
-        MessageEventDTO messageEventDTO = objectMapper.convertValue(message, MessageEventDTO.class);
-
-        try{
-            String messageString = objectMapper.writeValueAsString(messageEventDTO);
-
-            for (String node: userNodes) {
-                kafkaTemplate.send(KafkaConstant.KAFKA_CHAT_MESSAGE_PREFIX + node, messageString);
-            }
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to send message", e);
-        }
+        //Broadcast event
+        webSocketHelper.forwardMessageEventBroadcast(messageEventDTO, userNodes);
     }
 
     @Transactional
@@ -327,38 +315,7 @@ public class MessageServiceImpl implements MessageService {
 
         //notify user
         List<String> chatParticipantNumbers = chatParticipantRepository.findAllChatParticipantNumberOnlyByChatId(chatId);
-        List<UserSocketConnectionDTO> userSocketConnectionDTOS = redisService.multiGet(chatParticipantNumbers, UserSocketConnectionDTO.class);
-
-        Map<String, List<NotifyUserEventDTO>> notifyMap = new HashMap<>();
-
-        for (UserSocketConnectionDTO userEventDTO : userSocketConnectionDTOS) {
-            NotifyUserEventDTO notifyUserEventDTO = NotifyUserEventDTO.builder()
-                    .chatId(chatId)
-                    .recipientPhoneNumber(userEventDTO.getPhoneNumber())
-                    .senderPhoneNumber(phoneNumber)
-                    .type(NotificationType.MESSAGE_DELIVERED)
-                    .build();
-
-            if (notifyMap.containsKey(userEventDTO.getNodeId())) {
-                List<NotifyUserEventDTO> notifyUserEventDTOS = notifyMap.get(userEventDTO.getNodeId());
-                notifyUserEventDTOS.add(notifyUserEventDTO);
-            }else {
-                List<NotifyUserEventDTO> notifyUserEventDTOS = new LinkedList<>();
-                notifyUserEventDTOS.add(notifyUserEventDTO);
-                notifyMap.put(userEventDTO.getNodeId(), notifyUserEventDTOS);
-            }
-        }
-
-        //publish to related node
-        for (Map.Entry<String, List<NotifyUserEventDTO>> entry : notifyMap.entrySet()) {
-            try {
-                String topic = KafkaConstant.KAFKA_USER_NOTIFY_PREFIX + entry.getKey();
-                String json =  objectMapper.writeValueAsString(entry.getValue());
-                kafkaTemplate.send(topic, json);
-            }catch (Exception e) {
-                log.error("error transform to string for node {}", entry.getKey(), e);
-            }
-        }
+        webSocketHelper.forwardMessageEventP2P(chatParticipantNumbers, chatId, phoneNumber, NotificationType.MESSAGE_DELIVERED);
 
         return messageDTOS;
     }
@@ -371,74 +328,14 @@ public class MessageServiceImpl implements MessageService {
 
         //notify user
         List<String> chatParticipantNumbers = chatParticipantRepository.findAllChatParticipantNumberOnlyByChatId(chatId);
-        List<UserSocketConnectionDTO> userSocketConnectionDTOS = redisService.multiGet(chatParticipantNumbers, UserSocketConnectionDTO.class);
-        Map<String, List<NotifyUserEventDTO>> notifyMap = new HashMap<>();
-
-        for (UserSocketConnectionDTO userEventDTO : userSocketConnectionDTOS) {
-            NotifyUserEventDTO notifyUserEventDTO = NotifyUserEventDTO.builder()
-                    .chatId(chatId)
-                    .recipientPhoneNumber(userEventDTO.getPhoneNumber())
-                    .senderPhoneNumber(phoneNumber)
-                    .type(NotificationType.MESSAGE_READ)
-                    .build();
-
-            if (notifyMap.containsKey(userEventDTO.getNodeId())) {
-                List<NotifyUserEventDTO> notifyUserEventDTOS = notifyMap.get(userEventDTO.getNodeId());
-                notifyUserEventDTOS.add(notifyUserEventDTO);
-            }else {
-                List<NotifyUserEventDTO> notifyUserEventDTOS = new LinkedList<>();
-                notifyUserEventDTOS.add(notifyUserEventDTO);
-                notifyMap.put(userEventDTO.getNodeId(), notifyUserEventDTOS);
-            }
-        }
-
-        //publish to related node
-        for (Map.Entry<String, List<NotifyUserEventDTO>> entry : notifyMap.entrySet()) {
-            try {
-                String topic = KafkaConstant.KAFKA_USER_NOTIFY_PREFIX + entry.getKey();
-                String json =  objectMapper.writeValueAsString(entry.getValue());
-                kafkaTemplate.send(topic, json);
-            }catch (Exception e) {
-                log.error("error transform to string for node {}", entry.getKey(), e);
-            }
-        }
+        webSocketHelper.forwardMessageEventP2P(chatParticipantNumbers, chatId, phoneNumber, NotificationType.MESSAGE_READ);
     }
 
     @Override
     public void notifyUserTypingStatus(UserTypingStatusDTO dto, String phoneNumber) {
         //notify user
         List<String> chatParticipantNumbers = chatParticipantRepository.findAllChatParticipantNumberOnlyByChatId(dto.getChatId());
-        List<UserSocketConnectionDTO> userSocketConnectionDTOS = redisService.multiGet(chatParticipantNumbers, UserSocketConnectionDTO.class);
-        Map<String, List<NotifyUserEventDTO>> notifyMap = new HashMap<>();
-
-        for (UserSocketConnectionDTO userEventDTO : userSocketConnectionDTOS) {
-            NotifyUserEventDTO notifyUserEventDTO = NotifyUserEventDTO.builder()
-                    .chatId(dto.getChatId())
-                    .recipientPhoneNumber(userEventDTO.getPhoneNumber())
-                    .senderPhoneNumber(phoneNumber)
-                    .type(NotificationType.USER_TYPING)
-                    .build();
-
-            if (notifyMap.containsKey(userEventDTO.getNodeId())) {
-                List<NotifyUserEventDTO> notifyUserEventDTOS = notifyMap.get(userEventDTO.getNodeId());
-                notifyUserEventDTOS.add(notifyUserEventDTO);
-            }else {
-                List<NotifyUserEventDTO> notifyUserEventDTOS = new LinkedList<>();
-                notifyUserEventDTOS.add(notifyUserEventDTO);
-                notifyMap.put(userEventDTO.getNodeId(), notifyUserEventDTOS);
-            }
-        }
-
-        //publish to related node
-        for (Map.Entry<String, List<NotifyUserEventDTO>> entry : notifyMap.entrySet()) {
-            try {
-                String topic = KafkaConstant.KAFKA_USER_NOTIFY_PREFIX + entry.getKey();
-                String json =  objectMapper.writeValueAsString(entry.getValue());
-                kafkaTemplate.send(topic, json);
-            }catch (Exception e) {
-                log.error("error transform to string for node {}", entry.getKey(), e);
-            }
-        }
+        webSocketHelper.forwardMessageEventP2P(chatParticipantNumbers, dto.getChatId(), phoneNumber, NotificationType.USER_TYPING);
     }
 
     @Transactional
@@ -483,17 +380,10 @@ public class MessageServiceImpl implements MessageService {
         MessageActivityDTO messageActivityDTO = new MessageActivityDTO();
         BeanUtils.copyProperties(messageActivity, messageActivityDTO);
 
-        messageEventDTO.setActivities(Arrays.asList(messageActivityDTO));
+        messageEventDTO.setActivities(List.of(messageActivityDTO));
 
-        try{
-            String messageString = objectMapper.writeValueAsString(messageEventDTO);
-
-            for (String node: userNodes) {
-                kafkaTemplate.send(KafkaConstant.KAFKA_CHAT_MESSAGE_PREFIX + node, messageString);
-            }
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to send message", e);
-        }
+        //notify user
+        webSocketHelper.forwardMessageEventBroadcast(messageEventDTO, userNodes);
     }
 
     private MessageActivity createDefaultMessageActivityEntity(String participantPhoneNumber, long messageId, MessageStatusEnum messageStatus) {
